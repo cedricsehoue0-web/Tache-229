@@ -1,27 +1,36 @@
-import { initializeApp, cert } from 'firebase-admin/app';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import admin from 'firebase-admin';
 
-const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
-if (!global.firebaseApp) {
-  global.firebaseApp = initializeApp({ credential: cert(serviceAccount) });
+if (!admin.apps.length) {
+  const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: "https://tache-229-default-rtdb.firebaseio.com"
+  });
 }
-const db = getFirestore();
+
+const db = admin.database();
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).end();
-  const { cpm_amount, cpm_custom, cpm_result } = req.body;
-  if (cpm_result !== '00') return res.status(200).send('OK');
+  const event = req.body;
   
-  const montant = parseFloat(cpm_amount);
-  const partAdmin = montant * 0.6;
-  const partJoueur = montant * 0.4;
-  
-  await db.collection('admin_wallet').doc('main').update({
-    total_60: FieldValue.increment(partAdmin)
+  // On garde que les paiements réussis
+  if (event.entity?.status !== 'approved') {
+    return res.status(200).send('Pas un paiement');
+  }
+
+  const amount = event.entity.amount;
+  const userId = event.entity.metadata?.userId;
+
+  if (!userId || !amount) return res.status(400).send('Il manque userId ou montant');
+
+  // Le 60/40 magique
+  const adminCut = Math.floor(amount * 0.6);
+  const userCut = amount - adminCut;
+
+  await db.ref().update({
+    [`users/${userId}/solde_cpx`]: admin.database.ServerValue.increment(userCut),
+    [`admin_wallet/main/total_60`]: admin.database.ServerValue.increment(adminCut)
   });
-  await db.collection('users').doc(cpm_custom).set({
-    solde_cpx: FieldValue.increment(partJoueur)
-  }, { merge: true });
-  
-  res.status(200).send('OK');
+
+  res.status(200).send('60/40 OK');
 }
